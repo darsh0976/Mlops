@@ -14,7 +14,11 @@ class PipelineError(Exception):
 
 
 def parse_simple_yaml(path: str) -> Dict[str, Any]:
-    """Parse a simple key: value YAML file used in this assessment."""
+    """Parse a simple key: value YAML file with quoted string and integer support.
+    Inputs: path (str) - file path to YAML configuration file.
+    Output: Dict[str, Any] - dictionary of parsed key-value pairs.
+    Raises: PipelineError if file structure is invalid.
+    """
     data: Dict[str, Any] = {}
     with open(path, "r", encoding="utf-8") as f:
         for raw_line in f:
@@ -35,6 +39,11 @@ def parse_simple_yaml(path: str) -> Dict[str, Any]:
 
 
 def setup_logger(log_file: str) -> logging.Logger:
+    """Configure and return a logger that writes to both file and stdout.
+    Inputs: log_file (str) - path where log output will be written.
+    Output: logging.Logger - configured logger instance.
+    Format: timestamp - level - message.
+    """
     logger = logging.getLogger("mlops_task")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
@@ -51,23 +60,32 @@ def setup_logger(log_file: str) -> logging.Logger:
 
 
 def write_json(path: str, payload: Dict[str, Any]) -> None:
+    """Write a dictionary as JSON to file with 2-space indentation.
+    Inputs: path (str) - destination file path, payload (Dict) - data to serialize.
+    Output: None - writes JSON file to disk with pretty formatting.
+    """
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
 
 
 def load_and_validate_config(config_path: str) -> Dict[str, Any]:
+    """Load and validate YAML config file, ensuring required fields and types.
+    Inputs: config_path (str) - path to configuration file.
+    Output: Dict[str, Any] - validated config with seed (int), window (int), version (str).
+    Raises: PipelineError if file missing, unreadable, or validation fails.
+    """
     if not os.path.isfile(config_path):
-        raise PipelineError(f"Configuration file not found: {config_path}")
+        raise PipelineError("Configuration file not found")
 
     try:
         config = parse_simple_yaml(config_path)
     except OSError as exc:
-        raise PipelineError(f"Unable to read configuration file: {exc}") from exc
+        raise PipelineError("Unable to read configuration file") from exc
 
     required_keys = ["seed", "window", "version"]
     missing = [k for k in required_keys if k not in config]
     if missing:
-        raise PipelineError(f"Invalid configuration file structure: missing keys {missing}")
+        raise PipelineError(f"Config has missing keys: {missing}")
 
     seed = config["seed"]
     window = config["window"]
@@ -84,10 +102,15 @@ def load_and_validate_config(config_path: str) -> Dict[str, Any]:
 
 
 def load_and_validate_data(input_path: str) -> List[Dict[str, Any]]:
+    """Load and validate CSV file, ensuring 'close' column exists with numeric values.
+    Inputs: input_path (str) - path to CSV file.
+    Output: List[Dict[str, Any]] - list of row dictionaries with 'close' as float.
+    Raises: PipelineError if file missing, empty, invalid format, or missing 'close'.
+    """
     if not os.path.isfile(input_path):
-        raise PipelineError(f"Missing input file: {input_path}")
+        raise PipelineError("Missing input file")
     if not os.access(input_path, os.R_OK):
-        raise PipelineError(f"Input file is not readable: {input_path}")
+        raise PipelineError("Input file is not readable")
 
     if os.path.getsize(input_path) == 0:
         raise PipelineError("Empty input file")
@@ -98,7 +121,7 @@ def load_and_validate_data(input_path: str) -> List[Dict[str, Any]]:
             if reader.fieldnames is None:
                 raise PipelineError("Empty input file")
             if "close" not in reader.fieldnames:
-                raise PipelineError("Missing required columns in dataset: ['close']")
+                raise PipelineError("Missing required columns: close")
 
             rows: List[Dict[str, Any]] = []
             for row in reader:
@@ -106,12 +129,12 @@ def load_and_validate_data(input_path: str) -> List[Dict[str, Any]]:
                 try:
                     row_copy["close"] = float(row_copy["close"])
                 except (TypeError, ValueError) as exc:
-                    raise PipelineError("Invalid CSV file format: non-numeric close value") from exc
+                    raise PipelineError("Invalid close value: must be numeric") from exc
                 rows.append(row_copy)
     except PipelineError:
         raise
     except Exception as exc:
-        raise PipelineError(f"Invalid CSV file format: {exc}") from exc
+        raise PipelineError("Invalid CSV file format") from exc
 
     if not rows:
         raise PipelineError("Empty input file")
@@ -119,6 +142,11 @@ def load_and_validate_data(input_path: str) -> List[Dict[str, Any]]:
 
 
 def compute_signals(closes: List[float], window: int) -> List[int]:
+    """Generate binary signals based on rolling mean comparison using streaming algorithm.
+    Inputs: closes (List[float]) - price data, window (int) - rolling window size.
+    Output: List[int] - binary signals (1 if close > rolling_mean, else 0).
+    Pre-window values are padded with 0 before sufficient data accumulates.
+    """
     signals: List[int] = []
     running_sum = 0.0
     buffer: List[float] = []
@@ -140,24 +168,29 @@ def compute_signals(closes: List[float], window: int) -> List[int]:
 
 
 def run_pipeline(input_path: str, config_path: str, logger: logging.Logger) -> Dict[str, Any]:
-    config = load_and_validate_config(config_path)
-    seed = config["seed"]
-    window = config["window"]
-    version = config["version"]
+    """Execute complete MLOps pipeline: load config, validate data, compute signals.
+    Inputs: input_path (str) - CSV file, config_path (str) - YAML config, logger (Logger).
+    Output: Dict[str, Any] - metrics dict with version, rows_processed, signal_rate, seed, status.
+    Raises: PipelineError for any validation or processing failures.
+    """
+    config: Dict[str, Any] = load_and_validate_config(config_path)
+    seed: int = config["seed"]
+    window: int = config["window"]
+    version: str = config["version"]
 
     random.seed(seed)
     logger.info("Config loaded: seed=%s, window=%s, version=%s", seed, window, version)
 
-    rows = load_and_validate_data(input_path)
-    rows_processed = len(rows)
+    rows: List[Dict[str, Any]] = load_and_validate_data(input_path)
+    rows_processed: int = len(rows)
     logger.info("Data loaded: %s rows", rows_processed)
 
-    closes = [row["close"] for row in rows]
+    closes: List[float] = [row["close"] for row in rows]
     logger.info("Rolling mean calculated with window=%s", window)
-    signals = compute_signals(closes, window)
+    signals: List[int] = compute_signals(closes, window)
     logger.info("Signals generated")
 
-    signal_rate = sum(signals) / rows_processed
+    signal_rate: float = sum(signals) / rows_processed
     logger.info("Metrics: signal_rate=%.4f, rows_processed=%s", signal_rate, rows_processed)
 
     return {
@@ -171,6 +204,10 @@ def run_pipeline(input_path: str, config_path: str, logger: logging.Logger) -> D
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments for the MLOps pipeline.
+    Inputs: None (parses sys.argv).
+    Output: argparse.Namespace - parsed arguments (input, config, output, log-file).
+    """
     parser = argparse.ArgumentParser(description="Mini MLOps batch pipeline")
     parser.add_argument("--input", required=True, help="Input CSV file path")
     parser.add_argument("--config", required=True, help="Configuration YAML file path")
@@ -180,15 +217,20 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    args = parse_args()
-    start = time.time()
-    logger = setup_logger(args.log_file)
+    """Main entry point: orchestrate pipeline execution and error handling.
+    Inputs: None (reads command-line arguments and environment).
+    Output: int - exit code (0 for success, 1 for failure).
+    Writes metrics JSON on success, error JSON with message on failure.
+    """
+    args: argparse.Namespace = parse_args()
+    start: float = time.time()
+    logger: logging.Logger = setup_logger(args.log_file)
 
     logger.info("Job started")
 
     try:
-        metrics = run_pipeline(args.input, args.config, logger)
-        latency_ms = int((time.time() - start) * 1000)
+        metrics: Dict[str, Any] = run_pipeline(args.input, args.config, logger)
+        latency_ms: int = int((time.time() - start) * 1000)
         metrics["latency_ms"] = latency_ms
 
         write_json(args.output, metrics)
@@ -197,14 +239,14 @@ def main() -> int:
         return 0
     except Exception as exc:
         logger.exception("Job failed: %s", exc)
-        version = "v1"
+        version: str = "v1"
         try:
-            cfg = load_and_validate_config(args.config)
+            cfg: Dict[str, Any] = load_and_validate_config(args.config)
             version = cfg.get("version", "v1")
         except Exception:
             pass
 
-        error_payload = {
+        error_payload: Dict[str, Any] = {
             "version": version,
             "status": "error",
             "error_message": str(exc),

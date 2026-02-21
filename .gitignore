@@ -1,0 +1,47 @@
+# Python environment
+.venv/
+venv/
+env/
+ENV/
+.env
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+dist/
+build/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+test_*.json
+test.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Generated files
+metrics.json
+run.log
+*.tmp
+
+# Docker
+docker_data.vhdx
+ext4.vhdx
+
+# OS
+Thumbs.db
+.DS_Store
